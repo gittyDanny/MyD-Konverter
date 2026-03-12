@@ -2,7 +2,7 @@
 
 **XMLs und Migrationsprotokolle hochladen und das Leben genießen.**
 
-Ein Desktop-Tool zur Analyse und Konvertierung von SAP MyDesign (MyD) Migrationsdaten – von XML- und TXT-Dateien zu übersichtlichen Excel-Reports.
+Ein Desktop-Tool zur Analyse und Konvertierung von SAP Migrate your Data (MyD) Migrationsdaten – von XML- und TXT-Dateien zu übersichtlichen Excel-Reports.
 
 ---
 
@@ -11,7 +11,7 @@ Ein Desktop-Tool zur Analyse und Konvertierung von SAP MyDesign (MyD) Migrations
 - 📂 **XML-Parsing** – Liest MyD-Migrationsdateien (Produktstamm, Preise, Serien, Langtexte etc.)
 - 📄 **TXT-Parsing** – Verarbeitet SAP-Migrationsprotokolle und extrahiert Fehler/Warnungen
 - 📊 **Excel-Export** – Generiert formatierte Excel-Dateien mit mehreren Sheets, Filtern und Auto-Spaltenbreite
-- 🖥️ **GUI** – Einfache Drag & Drop Oberfläche (oder Ordner-Auswahl per Dialog)
+- 🖥️ **GUI** – Einfache Benutzeroberfläche (oder Ordner-Auswahl per Dialog)
 
 ---
 
