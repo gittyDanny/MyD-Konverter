@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/25952360/README.md)
 # 🔑 MyD Konverter
 
 **XMLs und Migrationsprotokolle hochladen und das Leben genießen.**
@@ -13,7 +12,6 @@ Ein Desktop-Tool zur Analyse und Konvertierung von SAP MyDesign (MyD) Migrations
 - 📄 **TXT-Parsing** – Verarbeitet SAP-Migrationsprotokolle und extrahiert Fehler/Warnungen
 - 📊 **Excel-Export** – Generiert formatierte Excel-Dateien mit mehreren Sheets, Filtern und Auto-Spaltenbreite
 - 🖥️ **GUI** – Einfache Drag & Drop Oberfläche (oder Ordner-Auswahl per Dialog)
-- 🎨 **PwC-Design** – Professionelles Erscheinungsbild mit Corporate Theme
 
 ---
 
