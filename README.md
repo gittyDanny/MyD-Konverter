@@ -63,8 +63,8 @@ MyD_Konverter/
 
 ## 📸 Screenshot
 
-<!-- Screenshot hier einfügen -->
-<!-- ![MyD Konverter](screenshot.png) -->
+<img width="1920" height="1200" alt="image" src="https://github.com/user-attachments/assets/0b649af8-02cd-47a8-8bdd-7400d8a8f65d" />
+
 
 ---
 
