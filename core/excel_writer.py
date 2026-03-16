@@ -1,5 +1,5 @@
 """
-Excel-Writer mit prüfungsnaher Formatierung - v4.
+Excel-Writer mit MyD Formatierung - v4.
 Multi-Protokoll Support + INDEX/MATCH Formeln.
 Unterstuetzt EN + DE Protokolle via _match_key.
 Enthaelt Anleitung-Sheet + intelligente Auswertung.
@@ -16,7 +16,7 @@ from config.theme import (
 )
 
 
-class PwCStyles:
+class MyDStyles:
     def __init__(self):
         self.title = Font(name='Arial', bold=True, color=EXCEL_ORANGE, size=16)
         self.subtitle = Font(name='Arial', bold=True, color=EXCEL_DARK, size=12)
@@ -65,53 +65,11 @@ class PwCStyles:
 def create_excel(all_data, skipped_files, output_path, all_protocols=None):
     wb = Workbook()
     wb.remove(wb.active)
-    s = PwCStyles()
+    s = MyDStyles()
     if all_protocols is None:
         all_protocols = []
 
-    # --- _match_key PRO KEY_SIG berechnen ---
-    all_proto_headers = set()
-    for proto in all_protocols:
-        for h in proto.get('headers', []):
-            all_proto_headers.add(h)
-
-    has_product_number = 'Product Number' in all_proto_headers
-
-    for key_sig, info in all_data.items():
-        fields = info['fields']
-        # Gemeinsame Felder zwischen diesem key_sig und dem Protokoll
-        common = [f for f in fields if f in all_proto_headers]
-
-        if common:
-            # Exakte Feld-Uebereinstimmung → nutze gemeinsame Felder
-            for row in info['rows']:
-                key_parts = [row.get(f, '').strip() for f in common]
-                row['_match_key'] = '|'.join(key_parts)
-        elif has_product_number:
-            # Proto hat Product Number, dieses key_sig hat kein Product Number
-            # → Erstes Key-Feld koennte Material Number sein (= Product Number)
-            first_field = fields[0] if fields else None
-            for row in info['rows']:
-                val = row.get(first_field, '').strip() if first_field else ''
-                row['_match_key'] = val
-        else:
-            # Kein Protokoll → alle Key-Felder verketten
-            for row in info['rows']:
-                key_parts = [row.get(f, '').strip() for f in fields]
-                row['_match_key'] = '|'.join(key_parts)
-
-    # Proto _match_key = Product Number
-    for proto in all_protocols:
-        for row in proto['data']:
-            if has_product_number:
-                row['_match_key'] = row.get('Product Number', '').strip()
-            else:
-                non_meta = [h for h in proto.get('headers', [])
-                            if h not in ('Action', 'Status', 'Action_Normalized', 'Status_Normalized')]
-                key_parts = [row.get(h, '').strip() for h in non_meta[:3]]
-                row['_match_key'] = '|'.join(key_parts)
-
-    # Merged lookup
+    # Merged lookup ueber _match_key (nur erstes Key-Feld = Product/Material Number)
     merged_lookup = {}
     for proto in all_protocols:
         for row in proto['data']:
@@ -119,34 +77,75 @@ def create_excel(all_data, skipped_files, output_path, all_protocols=None):
             if mk:
                 merged_lookup[mk] = row
 
-    # Proto-Keys nicht in XML
-    xml_keys = set()
-    for info in all_data.values():
+    # --- Per-Key-Typ Statistiken berechnen ---
+    per_key_stats = {}
+    sn = 0
+    for key_sig, info in all_data.items():
+        sn += 1
+        first_field = info['fields'][0]  # Product Number / Material Number
+
+        # Unique Match-Keys fuer diesen Key-Typ (nur erstes Feld)
+        key_matches = {}
         for row in info['rows']:
-            mk = row.get('_match_key', '').strip()
-            if mk:
-                xml_keys.add(mk)
+            pk = row.get(first_field, '').strip()
+            if pk:
+                if pk not in key_matches:
+                    key_matches[pk] = []
+                key_matches[pk].append(row)
+
+        unique_keys = set(key_matches.keys())
+        missing = unique_keys - set(merged_lookup.keys())
+        matched = unique_keys - missing
+
+        missing_by_file = {}
+        for mk in missing:
+            for row in key_matches[mk]:
+                fname = row.get('_filename', '')
+                if fname not in missing_by_file:
+                    missing_by_file[fname] = []
+                if mk not in missing_by_file[fname]:
+                    missing_by_file[fname].append(mk)
+
+        per_key_stats[key_sig] = {
+            'key_num': sn,
+            'first_field': first_field,
+            'total_rows': len(info['rows']),
+            'unique_keys': len(unique_keys),
+            'matched': len(matched),
+            'missing': len(missing),
+            'has_duplicates': len(info['rows']) > len(unique_keys),
+            'duplicate_count': len(info['rows']) - len(unique_keys),
+            'missing_by_file': missing_by_file,
+        }
+
+    # Proto-Keys die in KEINEM Key-Typ vorkommen
+    all_xml_first_keys = set()
+    for key_sig, info in all_data.items():
+        first_field = info['fields'][0]
+        for row in info['rows']:
+            pk = row.get(first_field, '').strip()
+            if pk:
+                all_xml_first_keys.add(pk)
+
     proto_only_keys = []
     for proto in all_protocols:
         for row in proto['data']:
             mk = row.get('_match_key', '').strip()
-            if mk and mk not in xml_keys:
+            if mk and mk not in all_xml_first_keys:
                 proto_only_keys.append(mk)
 
-    # Missing: XML-Produkte nicht im Protokoll
-    missing_by_file = {}
-    if all_protocols:
-        for info in all_data.values():
-            for row in info['rows']:
-                mk = row.get('_match_key', '').strip()
-                fname = row.get('_filename', '')
-                if mk and mk not in merged_lookup:
-                    if fname not in missing_by_file:
-                        missing_by_file[fname] = []
-                    missing_by_file[fname].append(mk)
+    # Legacy missing_by_file fuer Dashboard (Gesamt ueber alle Key-Typen)
+    missing_by_file_global = {}
+    for ks_info in per_key_stats.values():
+        for fname, keys in ks_info['missing_by_file'].items():
+            if fname not in missing_by_file_global:
+                missing_by_file_global[fname] = []
+            missing_by_file_global[fname].extend(keys)
+
     _create_dashboard(wb, all_data, skipped_files, s, all_protocols,
-                      missing_by_file, merged_lookup, proto_only_keys)
-    _create_anleitung(wb, s)
+                      missing_by_file_global, merged_lookup, proto_only_keys,
+                      per_key_stats=per_key_stats)
+    _create_anleitung(wb, s, all_data)
 
     proto_sheet_names = []
     for i, proto in enumerate(all_protocols):
@@ -156,9 +155,17 @@ def create_excel(all_data, skipped_files, output_path, all_protocols=None):
 
     _create_data_sheets(wb, all_data, s)
 
+    # --- EIN Vergleich-Sheet pro Key-Typ (pro Protokoll) ---
     for i, proto in enumerate(all_protocols):
-        vname = "Vergleich" if len(all_protocols) == 1 else f"Vergl_{i+1}"
-        _create_comparison_sheet(wb, all_data, s, proto_sheet_names[i], proto, vname)
+        sn = 0
+        for key_sig, info in all_data.items():
+            sn += 1
+            if len(all_protocols) == 1:
+                vname = f"Vergl_{sn}"
+            else:
+                vname = f"Vergl_{i+1}_{sn}"
+            _create_comparison_sheet(wb, info, sn, s, proto_sheet_names[i], proto, vname,
+                                     per_key_stats.get(key_sig, {}))
 
     if skipped_files:
         _create_error_sheet(wb, skipped_files, s)
@@ -168,7 +175,8 @@ def create_excel(all_data, skipped_files, output_path, all_protocols=None):
 
 
 def _create_dashboard(wb, all_data, skipped_files, s, all_protocols,
-                      missing_by_file, merged_lookup, proto_only_keys):
+                      missing_by_file, merged_lookup, proto_only_keys,
+                      per_key_stats=None):
     ws = wb.create_sheet(title="Uebersicht", index=0)
     for row in range(1, 120):
         for col in range(1, 12):
@@ -407,9 +415,9 @@ def _create_dashboard(wb, all_data, skipped_files, s, all_protocols,
             cell.font = s.header; cell.fill = s.red_fill; cell.alignment = s.center; cell.border = s.thin
         r += 1
         for fname, keys in missing_by_file.items():
-            ex = ", ".join(keys[:20])
-            if len(keys) > 20:
-                ex += f" ... (+{len(keys)-20} weitere)"
+            ex = ", ".join(keys[:5])
+            if len(keys) > 5:
+                ex += f" ... (+{len(keys)-5} weitere)"
             for col, val in enumerate(['', fname, len(keys), ex, '', '', ''], 2):
                 cell = ws.cell(row=r, column=col, value=val)
                 cell.font = s.data; cell.alignment = s.left; cell.border = s.thin; cell.fill = s.error_bg
@@ -451,6 +459,36 @@ def _create_dashboard(wb, all_data, skipped_files, s, all_protocols,
             cell.font = s.total; cell.border = s.thin; cell.fill = s.total_fill
         r += 2
 
+    # ═══════════════════════════════════════════════════════
+    # BLOCK 7: VERGLEICH PRO KEY-TYP
+    # ═══════════════════════════════════════════════════════
+    if per_key_stats and all_protocols:
+        ws.cell(row=r, column=2, value="VERGLEICH PRO KEY-TYP").font = s.subtitle
+        ws.merge_cells(f'B{r}:H{r}')
+        r += 1
+        ws.cell(row=r, column=2, value="Jeder Key-Typ wird separat gegen das Protokoll verglichen (siehe Vergl_1, Vergl_2, ...)").font = s.formula_hint
+        ws.merge_cells(f'B{r}:H{r}')
+        r += 1
+        for col, h in enumerate(['', 'Key-Typ', 'XML Zeilen', 'Unique Keys', 'Matched', 'Fehlend', 'Duplikate'], 2):
+            cell = ws.cell(row=r, column=col, value=h)
+            cell.font = s.header; cell.fill = s.dark_fill; cell.alignment = s.center; cell.border = s.thin
+        r += 1
+        for key_sig in all_data:
+            ks = per_key_stats.get(key_sig, {})
+            kn = ks.get('key_num', '?')
+            key_label = ' | '.join(all_data[key_sig]['fields'])
+            is_ok = ks.get('missing', 0) == 0
+            for col, val in enumerate(['', f'Key_{kn} ({key_label})', ks.get('total_rows', 0),
+                                        ks.get('unique_keys', 0), ks.get('matched', 0),
+                                        ks.get('missing', 0), ks.get('duplicate_count', 0)], 2):
+                cell = ws.cell(row=r, column=col, value=val)
+                cell.font = s.data; cell.alignment = s.center; cell.border = s.thin
+                if col == 7:
+                    cell.fill = s.success_bg if is_ok else s.error_bg
+                    cell.font = s.success if is_ok else s.error
+            r += 1
+        r += 1
+
     ws.column_dimensions['A'].width = 3; ws.column_dimensions['B'].width = 14
     ws.column_dimensions['C'].width = 22; ws.column_dimensions['D'].width = 42
     ws.column_dimensions['E'].width = 20; ws.column_dimensions['F'].width = 20
@@ -459,7 +497,7 @@ def _create_dashboard(wb, all_data, skipped_files, s, all_protocols,
     ws.sheet_properties.tabColor = EXCEL_ORANGE
 
 
-def _create_anleitung(wb, s):
+def _create_anleitung(wb, s, all_data=None):
     """Erklaert was geprueft wird, welche Formeln verwendet werden, und die Sheet-Struktur."""
     ws = wb.create_sheet(title="Anleitung")
     ws.sheet_properties.tabColor = EXCEL_DARK
@@ -526,7 +564,7 @@ def _create_anleitung(wb, s):
         ("Anleitung", "Diese Seite. Dokumentation aller Pruefungen und Formeln."),
         ("Protokoll / Proto_X", "Rohdaten des Migrationsprotokolls. Spalte A = Match_Key, B = Action (normalisiert), C = Status (normalisiert)."),
         ("Key_X", "Rohdaten der XML-Dateien mit allen Key-Feldern und dem Match_Key."),
-        ("Vergleich / Vergl_X", "Kreuzvergleich XML vs. Protokoll mit INDEX/MATCH-Formeln. Editierbar in Excel."),
+        ("Vergl_1, Vergl_2, ...", "Pro Key-Typ ein separater Kreuzvergleich XML vs. Protokoll. Match ueber erstes Key-Feld. INDEX/MATCH-Formeln, editierbar in Excel. Bei Key-Typen mit Duplikaten wird die Anzahl XML-Zeilen pro Key angezeigt."),
         ("Fehlerhafte Dateien", "XML-Dateien die nicht gelesen werden konnten (nur wenn Fehler auftraten)."),
     ]
 
@@ -694,27 +732,46 @@ def _create_data_sheets(wb, all_data, s):
         ws.auto_filter.ref = f'A1:{get_column_letter(len(headers))}1'
 
 
-def _create_comparison_sheet(wb, all_data, s, proto_sheet, proto, sheet_name):
+def _create_comparison_sheet(wb, info, key_num, s, proto_sheet, proto, sheet_name, key_stats):
+    """Erstellt ein Vergleich-Sheet fuer EINEN Key-Typ gegen das Protokoll.
+    Match erfolgt ueber das ERSTE Key-Feld (Product Number / Material Number)."""
     ws = wb.create_sheet(title=sheet_name)
     ws.sheet_properties.tabColor = EXCEL_GREEN
+    fields = info['fields']
+    first_field = fields[0]
+    has_dupes = key_stats.get('has_duplicates', False)
+    dupe_count = key_stats.get('duplicate_count', 0)
+
+    # Unique Keys sammeln (nur erstes Feld = Match gegen Protokoll)
     all_keys = []
     key_fnames = {}
     key_display = {}
-    for info in all_data.values():
-        fields = info['fields']
-        for row in info['rows']:
-            mk = row.get('_match_key', '').strip()
-            if mk and mk not in key_fnames:
-                all_keys.append(mk)
-                key_fnames[mk] = row.get('_filename', '')
-                key_display[mk] = ' | '.join(row.get(f, '') for f in fields)
+    key_row_count = {}
+    for row in info['rows']:
+        pk = row.get(first_field, '').strip()
+        if pk:
+            if pk not in key_fnames:
+                all_keys.append(pk)
+                key_fnames[pk] = row.get('_filename', '')
+                key_display[pk] = ' | '.join(row.get(f, '') for f in fields)
+                key_row_count[pk] = 1
+            else:
+                key_row_count[pk] = key_row_count.get(pk, 1) + 1
 
-    ws.cell(row=1, column=1, value=f"Vergleich: XML vs. {proto['filename']}").font = s.subtitle
+    # Header
+    key_label = ' | '.join(fields)
+    ws.cell(row=1, column=1, value=f"Vergleich Key_{key_num}: XML vs. {proto['filename']}").font = s.subtitle
     ws.merge_cells('A1:G1')
-    ws.cell(row=2, column=1, value="Spalten C-D = INDEX/MATCH Formeln (editierbar in Excel) - siehe Sheet Anleitung").font = s.formula_hint
+    hint = f"Key-Felder: {key_label} | Match ueber: {first_field} | Spalten C-D = INDEX/MATCH Formeln"
+    if has_dupes:
+        hint += f" | HINWEIS: {dupe_count} Duplikate (Spalte G zeigt Anzahl XML-Zeilen pro Key)"
+    ws.cell(row=2, column=1, value=hint).font = s.formula_hint
     ws.merge_cells('A2:G2')
 
-    for col, h in enumerate(['Match_Key', 'Key (Klartext)', 'Action', 'Status', 'Alles OK?', 'Dateiname'], 1):
+    headers = ['Match_Key', 'Key (Klartext)', 'Action', 'Status', 'Alles OK?', 'Dateiname']
+    if has_dupes:
+        headers.append('Anz. XML-Zeilen')
+    for col, h in enumerate(headers, 1):
         cell = ws.cell(row=4, column=col, value=h)
         cell.font = s.header; cell.fill = s.orange_fill; cell.alignment = s.center; cell.border = s.thin
 
@@ -742,6 +799,12 @@ def _create_comparison_sheet(wb, all_data, s, proto_sheet, proto, sheet_name):
         ws.cell(row=ri, column=6, value=key_fnames.get(mk, '')).font = s.data
         ws.cell(row=ri, column=6).alignment = s.left; ws.cell(row=ri, column=6).border = s.thin
 
+        if has_dupes:
+            cnt = key_row_count.get(mk, 1)
+            cell = ws.cell(row=ri, column=7, value=cnt)
+            cell.font = s.data_bold if cnt > 1 else s.data
+            cell.alignment = s.center; cell.border = s.thin
+
     ld = len(all_keys) + 4
 
     if ld >= 5:
@@ -761,29 +824,36 @@ def _create_comparison_sheet(wb, all_data, s, proto_sheet, proto, sheet_name):
             CellIsRule(operator='notEqual', formula=['"Migrated"'],
                 fill=PatternFill(start_color=EXCEL_ERROR_BG, end_color=EXCEL_ERROR_BG, patternType='solid'),
                 font=Font(color=EXCEL_RED, bold=True)))
-        ws.conditional_formatting.add(f'D5:D{ld}',
-            CellIsRule(operator='notEqual', formula=['"Success"'],
-                fill=PatternFill(start_color=EXCEL_ERROR_BG, end_color=EXCEL_ERROR_BG, patternType='solid'),
-                font=Font(color=EXCEL_RED, bold=True)))
-        ws.auto_filter.ref = f'A4:F{ld}'
 
     sr = ld + 2
-    ws.cell(row=sr, column=1, value="Zusammenfassung:").font = s.subtitle
-    ws.cell(row=sr+1, column=1, value="Gesamt:").font = s.data_bold
-    ws.cell(row=sr+1, column=2, value=len(all_keys)).font = s.data_bold
-    ws.cell(row=sr+2, column=1, value="OK:").font = s.data_bold
-    ws.cell(row=sr+2, column=2).value = f'=COUNTIF(E5:E{ld},"OK")'
-    ws.cell(row=sr+2, column=2).font = s.success
-    ws.cell(row=sr+3, column=1, value="Fehler:").font = s.data_bold
-    ws.cell(row=sr+3, column=2).value = f'=COUNTIF(E5:E{ld},"FEHLER")'
-    ws.cell(row=sr+3, column=2).font = s.error
-    ws.cell(row=sr+4, column=1, value="Fehlt:").font = s.data_bold
-    ws.cell(row=sr+4, column=2).value = f'=COUNTIF(E5:E{ld},"FEHLT")'
-    ws.cell(row=sr+4, column=2).font = s.warning
+    ws.cell(row=sr, column=1, value="ZUSAMMENFASSUNG").font = s.subtitle
+    ws.merge_cells(f'A{sr}:F{sr}')
+    sr += 1
+    ws.cell(row=sr, column=1, value=f"Key-Typ:").font = s.data_bold
+    ws.cell(row=sr, column=2, value=f"Key_{key_num} ({key_label})").font = s.data
+    sr += 1
+    ws.cell(row=sr, column=1, value="Unique Keys:").font = s.data_bold
+    ws.cell(row=sr, column=2, value=len(all_keys)).font = s.data_bold
+    if has_dupes:
+        ws.cell(row=sr, column=3, value=f"({len(info['rows'])} Zeilen total, {dupe_count} Duplikate)").font = s.formula_hint
+    sr += 1
+    ws.cell(row=sr, column=1, value="OK:").font = s.data_bold
+    ws.cell(row=sr, column=2).value = f'=COUNTIF(E5:E{ld},"OK")'
+    ws.cell(row=sr, column=2).font = s.success
+    sr += 1
+    ws.cell(row=sr, column=1, value="Fehler:").font = s.data_bold
+    ws.cell(row=sr, column=2).value = f'=COUNTIF(E5:E{ld},"FEHLER")'
+    ws.cell(row=sr, column=2).font = s.error
+    sr += 1
+    ws.cell(row=sr, column=1, value="Fehlt:").font = s.data_bold
+    ws.cell(row=sr, column=2).value = f'=COUNTIF(E5:E{ld},"FEHLT")'
+    ws.cell(row=sr, column=2).font = s.warning
 
     ws.column_dimensions['A'].width = 30; ws.column_dimensions['B'].width = 35
     ws.column_dimensions['C'].width = 18; ws.column_dimensions['D'].width = 16
     ws.column_dimensions['E'].width = 14; ws.column_dimensions['F'].width = 35
+    if has_dupes:
+        ws.column_dimensions['G'].width = 16
 
 
 def _create_error_sheet(wb, skipped_files, s):
